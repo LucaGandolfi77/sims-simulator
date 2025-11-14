@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sims Style Simulator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -41,7 +42,7 @@
             margin-top: 20px;
         }
 
-        /* Grid Area */
+        /* Grid 3D Area */
         .grid-container {
             flex: 1;
             background: #f0f4f8;
@@ -50,50 +51,11 @@
             box-shadow: inset 0 2px 10px rgba(0,0,0,0.1);
         }
 
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(10, 1fr);
-            gap: 2px;
-            background: #cbd5e0;
-            padding: 2px;
-            border-radius: 10px;
-        }
-
-        .cell {
-            aspect-ratio: 1;
-            background: white;
-            position: relative;
-            transition: background 0.3s;
-        }
-
-        .cell:hover {
-            background: #e6f2ff;
-        }
-
-        /* Sim Character */
-        .sim {
+        #canvas3d {
             width: 100%;
-            height: 100%;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.5em;
-            font-weight: bold;
-            color: white;
-            cursor: pointer;
-            transition: transform 0.3s, box-shadow 0.3s;
-            animation: pulse 2s infinite;
-        }
-
-        .sim:hover {
-            transform: scale(1.1);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-        }
-
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
+            height: 600px;
+            border-radius: 10px;
+            display: block;
         }
 
         /* Sidebar */
@@ -196,6 +158,7 @@
             max-height: 200px;
             overflow-y: auto;
             box-shadow: inset 0 2px 5px rgba(0,0,0,0.1);
+            margin-top: 15px;
         }
 
         .activity-log h4 {
@@ -264,11 +227,11 @@
 </head>
 <body>
     <div class="container">
-        <h1>🏠 Sims Style Simulator</h1>
+        <h1>🏠 Sims Style Simulator - 3D Edition</h1>
         
         <div class="game-area">
             <div class="grid-container">
-                <div class="grid" id="grid"></div>
+                <canvas id="canvas3d"></canvas>
                 <div class="activity-log">
                     <h4>📝 Activity Log</h4>
                     <div id="log"></div>
@@ -288,10 +251,148 @@
         // Game Configuration
         const CONFIG = {
             GRID_SIZE: 10,
-            UPDATE_INTERVAL: 2000, // Update interval (milliseconds)
-            ATTRIBUTE_DECAY: 0.5,  // Attribute decay rate
-            MAX_LOG_ENTRIES: 10
+            UPDATE_INTERVAL: 1000,
+            ATTRIBUTE_DECAY: 0.5,
+            MAX_LOG_ENTRIES: 10,
+            CELL_SIZE: 1
         };
+
+        // Three.js Scene Setup
+        let scene, camera, renderer;
+        let gridMeshes = [];
+        let simModels = {};
+
+        function initThreeJS() {
+            const canvas = document.getElementById('canvas3d');
+            
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f4f8);
+
+            // Camera
+            const width = canvas.clientWidth;
+            const height = canvas.clientHeight;
+            camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+            camera.position.set(5, 8, 8);
+            camera.lookAt(5, 0, 5);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+            renderer.setSize(width, height);
+            renderer.shadowMap.enabled = true;
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 10, 10);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            scene.add(directionalLight);
+
+            // Create Grid Floor
+            createGridFloor();
+
+            // Animation Loop
+            function animate() {
+                requestAnimationFrame(animate);
+                renderer.render(scene, camera);
+            }
+            animate();
+        }
+
+        function createGridFloor() {
+            // Create chessboard pattern
+            for (let x = 0; x < CONFIG.GRID_SIZE; x++) {
+                for (let z = 0; z < CONFIG.GRID_SIZE; z++) {
+                    const geometry = new THREE.PlaneGeometry(CONFIG.CELL_SIZE, CONFIG.CELL_SIZE);
+                    const isEven = (x + z) % 2 === 0;
+                    const material = new THREE.MeshStandardMaterial({
+                        color: isEven ? 0xffffff : 0xe0e0e0,
+                        roughness: 0.3,
+                        metalness: 0.1
+                    });
+                    const plane = new THREE.Mesh(geometry, material);
+                    plane.rotation.x = -Math.PI / 2;
+                    plane.position.set(x - CONFIG.GRID_SIZE / 2, -0.5, z - CONFIG.GRID_SIZE / 2);
+                    plane.receiveShadow = true;
+                    scene.add(plane);
+                    gridMeshes.push(plane);
+                }
+            }
+
+            // Add border
+            const borderGeometry = new THREE.BoxGeometry(CONFIG.GRID_SIZE + 0.2, 0.2, CONFIG.GRID_SIZE + 0.2);
+            const borderMaterial = new THREE.MeshStandardMaterial({ color: 0x666666 });
+            const border = new THREE.Mesh(borderGeometry, borderMaterial);
+            border.position.set(0, -0.6, 0);
+            border.receiveShadow = true;
+            scene.add(border);
+        }
+
+        function createSimModel(name, color) {
+            const group = new THREE.Group();
+
+            // Body
+            const bodyGeometry = new THREE.CylinderGeometry(0.25, 0.25, 0.5, 8);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 0.25;
+            body.castShadow = true;
+            body.receiveShadow = true;
+            group.add(body);
+
+            // Head
+            const headGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+            const headMaterial = new THREE.MeshStandardMaterial({ color: 0xffdbac });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.y = 0.6;
+            head.castShadow = true;
+            head.receiveShadow = true;
+            group.add(head);
+
+            // Eyes
+            const eyeGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+            const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000 });
+            const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+            leftEye.position.set(-0.07, 0.68, 0.15);
+            leftEye.castShadow = true;
+            group.add(leftEye);
+
+            const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+            rightEye.position.set(0.07, 0.68, 0.15);
+            rightEye.castShadow = true;
+            group.add(rightEye);
+
+            // Arms
+            for (let i = -1; i <= 1; i += 2) {
+                const armGeometry = new THREE.CylinderGeometry(0.08, 0.08, 0.4, 8);
+                const armMaterial = new THREE.MeshStandardMaterial({ color });
+                const arm = new THREE.Mesh(armGeometry, armMaterial);
+                arm.position.set(i * 0.3, 0.4, 0);
+                arm.castShadow = true;
+                arm.receiveShadow = true;
+                group.add(arm);
+            }
+
+            // Legs
+            for (let i = -1; i <= 1; i += 2) {
+                const legGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.3, 8);
+                const legMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+                const leg = new THREE.Mesh(legGeometry, legMaterial);
+                leg.position.set(i * 0.12, 0.05, 0);
+                leg.castShadow = true;
+                leg.receiveShadow = true;
+                group.add(leg);
+            }
+
+            group.scale.set(1.5, 1.5, 1.5);
+            group.userData.name = name;
+            group.castShadow = true;
+            return group;
+        }
 
         // Sim Class
         class Sim {
@@ -300,14 +401,27 @@
                 this.color = color;
                 this.x = x;
                 this.y = y;
-                this.hunger = 100;    // Hunger (0-100, higher is fuller)
-                this.energy = 100;    // Energy (0-100)
-                this.mood = 100;      // Mood (0-100)
+                this.hunger = 100;
+                this.energy = 100;
+                this.mood = 100;
                 this.action = 'Idle';
                 this.actionTimer = 0;
+                this.model = createSimModel(name, color);
+                scene.add(this.model);
+                this.updatePosition();
+                // Direction: 0=up, 1=right, 2=down, 3=left
+                this.direction = Math.floor(Math.random() * 4);
+                this.moveCounter = 0;
             }
 
-            // Update attributes (decay over time)
+            updatePosition() {
+                const posX = this.x - CONFIG.GRID_SIZE / 2 + 0.5;
+                const posZ = this.y - CONFIG.GRID_SIZE / 2 + 0.5;
+                this.model.position.x = posX;
+                this.model.position.z = posZ;
+                this.model.position.y = 0;
+            }
+
             updateAttributes() {
                 if (this.action === 'Idle') {
                     this.hunger = Math.max(0, this.hunger - CONFIG.ATTRIBUTE_DECAY);
@@ -315,13 +429,11 @@
                     this.mood = Math.max(0, this.mood - CONFIG.ATTRIBUTE_DECAY * 0.2);
                 }
 
-                // Mood affected by attributes
                 if (this.hunger < 30 || this.energy < 30) {
                     this.mood = Math.max(0, this.mood - 1);
                 }
             }
 
-            // Execute Eat action
             eat() {
                 if (this.actionTimer > 0) return false;
                 this.action = 'Eat';
@@ -332,7 +444,6 @@
                 return true;
             }
 
-            // Execute Sleep action
             sleep() {
                 if (this.actionTimer > 0) return false;
                 this.action = 'Sleep';
@@ -342,41 +453,58 @@
                 return true;
             }
 
-            // Random Movement
             randomMove() {
                 if (this.actionTimer > 0) return;
                 
-                const directions = [
-                    { dx: 0, dy: -1 }, // Up
-                    { dx: 0, dy: 1 },  // Down
-                    { dx: -1, dy: 0 }, // Left
-                    { dx: 1, dy: 0 }   // Right
+                // 30% chance to turn left or right, 70% chance to continue straight
+                if (Math.random() < 0.3) {
+                    // Turn: 50% left, 50% right
+                    if (Math.random() < 0.5) {
+                        this.direction = (this.direction + 3) % 4; // Turn left
+                    } else {
+                        this.direction = (this.direction + 1) % 4; // Turn right
+                    }
+                }
+                
+                // Calculate direction vector based on current direction
+                const directionMap = [
+                    { dx: 0, dy: -1 }, // 0: up
+                    { dx: 1, dy: 0 },  // 1: right
+                    { dx: 0, dy: 1 },  // 2: down
+                    { dx: -1, dy: 0 }  // 3: left
                 ];
                 
-                const dir = directions[Math.floor(Math.random() * directions.length)];
+                const dir = directionMap[this.direction];
                 const newX = Math.max(0, Math.min(CONFIG.GRID_SIZE - 1, this.x + dir.dx));
                 const newY = Math.max(0, Math.min(CONFIG.GRID_SIZE - 1, this.y + dir.dy));
                 
                 // Check if target position is occupied
-                const occupied = game.sims.some(s => s !== this && s.x === newX && s.y === newY);
-                if (!occupied) {
+                const occupied = (typeof game !== 'undefined' && game.sims) 
+                    ? game.sims.some(s => s !== this && s.x === newX && s.y === newY)
+                    : false;
+                
+                if (!occupied && (newX !== this.x || newY !== this.y)) {
                     this.x = newX;
                     this.y = newY;
+                    this.updatePosition();
+                } else if (occupied || (newX === this.x && newY === this.y)) {
+                    // If blocked or at boundary, turn randomly
+                    this.direction = Math.floor(Math.random() * 4);
                 }
             }
 
-            // Interact with other Sim
             interact(otherSim) {
                 if (this.actionTimer > 0) return false;
                 this.action = 'Socialize';
                 this.actionTimer = 3;
                 this.mood = Math.min(100, this.mood + 20);
                 otherSim.mood = Math.min(100, otherSim.mood + 20);
-                game.addLog(`${this.name} is chatting with ${otherSim.name} 💬`);
+                if (typeof game !== 'undefined') {
+                    game.addLog(`${this.name} is chatting with ${otherSim.name} 💬`);
+                }
                 return true;
             }
 
-            // Update action timer
             updateAction() {
                 if (this.actionTimer > 0) {
                     this.actionTimer--;
@@ -384,6 +512,10 @@
                         this.action = 'Idle';
                     }
                 }
+            }
+
+            dispose() {
+                scene.remove(this.model);
             }
         }
 
@@ -397,31 +529,16 @@
             }
 
             init() {
-                // Create Sims
+                initThreeJS();
+
                 this.sims = [
-                    new Sim('Alex', '#FF6B6B', 2, 2),
-                    new Sim('Bella', '#4ECDC4', 7, 7),
-                    new Sim('Carl', '#FFD93D', 5, 3)
+                    new Sim('Alex', 0xFF6B6B, 2, 2),
+                    new Sim('Bella', 0x4ECDC4, 7, 7),
+                    new Sim('Carl', 0xFFD93D, 5, 3)
                 ];
 
-                // Create Grid
-                this.createGrid();
                 this.createSidebar();
-                
-                // Start game loop
                 this.gameLoop();
-            }
-
-            createGrid() {
-                const grid = document.getElementById('grid');
-                grid.innerHTML = '';
-                
-                for (let i = 0; i < CONFIG.GRID_SIZE * CONFIG.GRID_SIZE; i++) {
-                    const cell = document.createElement('div');
-                    cell.className = 'cell';
-                    cell.dataset.index = i;
-                    grid.appendChild(cell);
-                }
             }
 
             createSidebar() {
@@ -486,20 +603,22 @@
                         this.addLog(`${sim.name} moved position 🚶`);
                         break;
                 }
-                this.render();
+                this.updateSidebar();
             }
 
-            // Check interactions between Sims
             checkInteractions() {
                 for (let i = 0; i < this.sims.length; i++) {
                     for (let j = i + 1; j < this.sims.length; j++) {
                         const sim1 = this.sims[i];
                         const sim2 = this.sims[j];
                         
-                        // Check if adjacent
                         const distance = Math.abs(sim1.x - sim2.x) + Math.abs(sim1.y - sim2.y);
                         if (distance === 1 && Math.random() < 0.3) {
-                            sim1.interact(sim2);
+                            try {
+                                sim1.interact(sim2);
+                            } catch (e) {
+                                console.error('Interaction error:', e);
+                            }
                         }
                     }
                 }
@@ -507,57 +626,34 @@
 
             gameLoop() {
                 if (!this.paused) {
-                    // Update all Sims
                     this.sims.forEach(sim => {
                         sim.updateAttributes();
                         sim.updateAction();
                         
-                        // Random movement
-                        if (Math.random() < 0.3 && sim.actionTimer === 0) {
+                        // Move every update (much more frequent)
+                        if (sim.actionTimer === 0) {
                             sim.randomMove();
                         }
                     });
 
-                    // Check interactions
                     this.checkInteractions();
-
-                    // Render
-                    this.render();
+                    this.updateSidebar();
                 }
 
                 setTimeout(() => this.gameLoop(), CONFIG.UPDATE_INTERVAL);
             }
 
-            render() {
-                // Clear grid
-                const cells = document.querySelectorAll('.cell');
-                cells.forEach(cell => cell.innerHTML = '');
-
-                // Render Sims
+            updateSidebar() {
                 this.sims.forEach(sim => {
-                    const index = sim.y * CONFIG.GRID_SIZE + sim.x;
-                    const cell = cells[index];
-                    const simEl = document.createElement('div');
-                    simEl.className = 'sim';
-                    simEl.style.background = sim.color;
-                    simEl.textContent = sim.name.charAt(0);
-                    simEl.title = `${sim.name} - ${sim.action}`;
-                    cell.appendChild(simEl);
-
-                    // Update Sidebar
-                    this.updateSidebar(sim);
-                });
-            }
-
-            updateSidebar(sim) {
-                ['hunger', 'energy', 'mood'].forEach(attr => {
-                    const value = Math.round(sim[attr]);
-                    const el = document.getElementById(`${sim.name}-${attr}`);
-                    const valEl = document.getElementById(`${sim.name}-${attr}-val`);
-                    if (el && valEl) {
-                        el.style.width = `${value}%`;
-                        valEl.textContent = value;
-                    }
+                    ['hunger', 'energy', 'mood'].forEach(attr => {
+                        const value = Math.round(sim[attr]);
+                        const el = document.getElementById(`${sim.name}-${attr}`);
+                        const valEl = document.getElementById(`${sim.name}-${attr}-val`);
+                        if (el && valEl) {
+                            el.style.width = `${value}%`;
+                            valEl.textContent = value;
+                        }
+                    });
                 });
             }
 
@@ -581,14 +677,39 @@
             resetGame() {
                 this.logs = [];
                 this.paused = false;
+                
+                // Remove old models
+                this.sims.forEach(sim => sim.dispose());
+                this.sims = [];
+                
+                // Clear scene
+                gridMeshes = [];
+                scene.children = [];
+                
                 this.init();
                 this.addLog('🔄 Game Reset');
             }
         }
 
         // Start Game
-        const game = new Game();
-        game.addLog('🎮 Game Started!');
+        let game;
+        document.addEventListener('DOMContentLoaded', () => {
+            game = new Game();
+            game.addLog('🎮 Game Started!');
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            const canvas = document.getElementById('canvas3d');
+            if (!canvas) return;
+            const width = canvas.clientWidth;
+            const height = canvas.clientHeight;
+            if (camera) {
+                camera.aspect = width / height;
+                camera.updateProjectionMatrix();
+                renderer.setSize(width, height);
+            }
+        });
     </script>
 </body>
 </html>
