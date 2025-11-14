@@ -254,7 +254,9 @@
             UPDATE_INTERVAL: 1000,
             ATTRIBUTE_DECAY: 0.5,
             MAX_LOG_ENTRIES: 10,
-            CELL_SIZE: 2.5
+            CELL_SIZE: 2.5,
+            PIZZA_REGEN_TIME: 60000, // 15 secondi
+            MAX_PIZZAS: 3
         };
 
         // Three.js Scene Setup
@@ -370,6 +372,58 @@
                 }
             }
 
+            // Create food stand with counter and pizzas
+            createFoodStand();
+        }
+
+        function createFoodStand() {
+            // Counter base - positioned at the edge of the grid
+            const counterGeometry = new THREE.BoxGeometry(3, 1, 1.5);
+            const counterMaterial = new THREE.MeshStandardMaterial({ color: 0x8b7355 });
+            const counter = new THREE.Mesh(counterGeometry, counterMaterial);
+            const counterX = CONFIG.GRID_SIZE / 2 * CONFIG.CELL_SIZE - 1.5;
+            counter.position.set(counterX - CONFIG.GRID_SIZE * CONFIG.CELL_SIZE / 2 + CONFIG.CELL_SIZE / 2, 0.5, 0);
+            counter.castShadow = true;
+            counter.receiveShadow = true;
+            scene.add(counter);
+
+            // Store food stand position and pizza state for interaction detection
+            scene.userData.foodStandPos = {
+                x: counterX - CONFIG.GRID_SIZE * CONFIG.CELL_SIZE / 2 + CONFIG.CELL_SIZE / 2,
+                z: 0,
+                pizzasRemaining: CONFIG.MAX_PIZZAS,
+                pizzaMeshes: [],
+                lastRegenTime: Date.now(),
+                counterX: counterX - CONFIG.GRID_SIZE * CONFIG.CELL_SIZE / 2 + CONFIG.CELL_SIZE / 2
+            };
+
+            // Create initial pizzas
+            createPizzas();
+        }
+
+        function createPizzas() {
+            // Remove old pizzas
+            scene.userData.foodStandPos.pizzaMeshes.forEach(pizza => {
+                scene.remove(pizza);
+            });
+            scene.userData.foodStandPos.pizzaMeshes = [];
+            scene.userData.foodStandPos.pizzasRemaining = CONFIG.MAX_PIZZAS;
+
+            // Add new pizzas on the counter
+            for (let i = 0; i < CONFIG.MAX_PIZZAS; i++) {
+                const pizzaGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 8);
+                const pizzaMaterial = new THREE.MeshStandardMaterial({ color: 0xff9a00 });
+                const pizza = new THREE.Mesh(pizzaGeometry, pizzaMaterial);
+                pizza.position.set(
+                    scene.userData.foodStandPos.counterX - 0.8 + i * 0.8,
+                    1.2,
+                    0
+                );
+                pizza.castShadow = true;
+                pizza.receiveShadow = true;
+                scene.add(pizza);
+                scene.userData.foodStandPos.pizzaMeshes.push(pizza);
+            }
         }
 
         function createSimModel(name, color) {
@@ -536,10 +590,22 @@
 
             eat() {
                 if (this.actionTimer > 0) return false;
+                // Check if there are pizzas available
+                if (!scene.userData.foodStandPos || scene.userData.foodStandPos.pizzasRemaining <= 0) {
+                    return false;
+                }
                 this.action = 'Eat';
                 this.actionTimer = 3;
                 this.hunger = Math.min(100, this.hunger + 40);
                 this.mood = Math.min(100, this.mood + 10);
+                
+                // Decrease pizza count and update display
+                scene.userData.foodStandPos.pizzasRemaining--;
+                if (scene.userData.foodStandPos.pizzaMeshes.length > 0) {
+                    const lastPizza = scene.userData.foodStandPos.pizzaMeshes.pop();
+                    scene.remove(lastPizza);
+                }
+                
                 game.addLog(`${this.name} is eating 🍽️`);
                 return true;
             }
@@ -721,6 +787,21 @@
             }
 
             checkInteractions() {
+                // Check food stand interaction
+                if (scene.userData.foodStandPos) {
+                    this.sims.forEach(sim => {
+                        const distToFood = Math.sqrt(
+                            Math.pow(sim.model.position.x - scene.userData.foodStandPos.x, 2) +
+                            Math.pow(sim.model.position.z - scene.userData.foodStandPos.z, 2)
+                        );
+                        
+                        if (distToFood < 2.5) {
+                            sim.eat();
+                        }
+                    });
+                }
+
+                // Check sim interactions
                 for (let i = 0; i < this.sims.length; i++) {
                     for (let j = i + 1; j < this.sims.length; j++) {
                         const sim1 = this.sims[i];
@@ -740,6 +821,16 @@
 
             gameLoop() {
                 if (!this.paused) {
+                    // Regenerate pizzas if time has passed
+                    if (scene.userData.foodStandPos) {
+                        const now = Date.now();
+                        if (now - scene.userData.foodStandPos.lastRegenTime >= CONFIG.PIZZA_REGEN_TIME) {
+                            createPizzas();
+                            scene.userData.foodStandPos.lastRegenTime = now;
+                            this.addLog('🍕 Pizzas regenerated!');
+                        }
+                    }
+
                     this.sims.forEach(sim => {
                         sim.updateAttributes();
                         sim.updateAction();
