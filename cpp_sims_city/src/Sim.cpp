@@ -191,68 +191,66 @@ void Sim::Update(float deltaTime, std::vector<Tree>& trees, std::vector<Sim>& al
 }
 
 void Sim::MakeDecision(const std::vector<House>& houses, const Office& office) {
-    // Decision tree based on probabilities and stats
-
-    float randomVal = (float)rand() / RAND_MAX;
+    // Better AI: Priority-Based Decision Making
     
-    // Check Work (If High Energy and Low Money)
-    if (energy > 50.0f && money < 200.0f) {
-        if (!office.desks.empty()) {
-            // 80% chance to go to work if needed
-            if (randomVal < 0.8f) {
-                // Pick a desk
+    // 1. CRITICAL SURVIVAL NEEDS
+    // If very tired, go to sleep.
+    if (energy < 30.0f) {
+        if (!houses.empty()) {
+            // Find a random house to sleep in
+            int hIndex = rand() % houses.size();
+            const House& h = houses[hIndex];
+            float hx = h.rect.x + h.rect.width/2;
+            float hz = h.rect.y + h.rect.height/2;
+            
+            targetPosition = { hx, 0.5f, hz };
+            currentState = WALKING_TO_BED;
+            actionDuration = 60.0f; // Give proper time to walk
+        } else {
+             // No house? Sleep on ground
+             currentState = SLEEPING;
+             actionDuration = 10.0f; 
+        }
+        return;
+    }
+
+    // If very hungry, eat
+    if (hunger > 60.0f) {
+        // Look for food (Trees are everywhere)
+        // In improved version, we should walk to a tree.
+        // For now, we set state to EATING and assume they find food or pull a snack.
+        currentState = EATING;
+        actionDuration = 5.0f; 
+        return;
+    }
+
+    // 2. WORK / MONEY (If needs are met)
+    // If poor and has enough energy, go to work
+    if (money < 500.0f && energy > 60.0f) {
+        // 70% chance to be responsible
+        if ((rand() % 100) < 70) {
+            if (!office.desks.empty()) {
                 int dIndex = rand() % office.desks.size();
                 targetPosition = office.desks[dIndex];
                 currentState = WALKING_TO_WORK;
-                actionDuration = 60.0f; // Max travel time
+                actionDuration = 60.0f;
                 return;
             }
         }
     }
 
-    // High priority: Survival
-    if (energy < 20.0f) {
-        // Very tired -> High chance to sleep
-        if (randomVal < 0.9f) {
-            // Option: Go to a house to sleep?
-            if (!houses.empty()) {
-                // 70% chance to seek a bed if available
-                if (((float)rand()/RAND_MAX) < 0.7f) {
-                    // Find a random house
-                    int hIndex = rand() % houses.size();
-                    const House& h = houses[hIndex];
-                    float hx = h.rect.x + h.rect.width/2;
-                    float hz = h.rect.y + h.rect.height/2;
-                    
-                    targetPosition = { hx, 0.5f, hz };
-                    currentState = WALKING_TO_BED;
-                    actionDuration = 60.0f; // Give time to walk there
-                    return;
-                }
-            }
-            currentState = SLEEPING;
-            actionDuration = 5.0f; // Sleep on ground for 5 seconds
-            return;
-        }
-    }
-
-    if (hunger > 70.0f) {
-        // Very hungry -> High chance to eat
-        if (randomVal < 0.8f) {
-            currentState = EATING;
-            actionDuration = 3.0f; // Eat for 3 seconds
-            return;
-        }
-    }
-
-    // Low priority: Idle or Wander
-    if (randomVal < 0.3f) {
+    // 3. SOCIAL / LEISURE
+    // If lonely (high anxiety), try to socialize is handled in Update loop via proximity.
+    // Here we just wander or idle to facilitate meetings.
+    
+    float activityRoll = (float)rand() / RAND_MAX;
+    if (activityRoll < 0.3f) {
         currentState = IDLE;
-        actionDuration = 1.0f + ((float)rand() / RAND_MAX) * 2.0f; // 1-3 seconds idle
+        actionDuration = 2.0f + ((float)rand() / RAND_MAX) * 3.0f; // Chill
     } else {
         currentState = WANDERING;
         PickRandomDestination();
-        actionDuration = 4.0f; 
+        actionDuration = 5.0f; 
     }
 }
 
@@ -268,8 +266,9 @@ void Sim::Draw() {
     if (currentState == SLEEPING) {
         Vector3 startPos = { position.x - 1.0f, 0.5f, position.z };
         Vector3 endPos   = { position.x + 1.0f, 0.5f, position.z };
-        Color sleepColor = ColorTint(color, GRAY);
-        DrawCylinderEx(startPos, endPos, 0.5f, 0.5f, 8, sleepColor);
+        // Don't change color when sleeping, keep original id color
+        // Just rotate geometry to look like lying down
+        DrawCylinderEx(startPos, endPos, 0.5f, 0.5f, 8, color);
         DrawSphere({ position.x + 1.3f, 0.5f, position.z }, 0.4f, BEIGE);
     } 
     else if (currentState == WORKING) {
