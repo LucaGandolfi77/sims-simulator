@@ -5,13 +5,21 @@
 
 struct Building {
     int id;
+    int cityId;
     Vector3 position;
-    Color color;
-    bool isWorkplace; // true = workplace, false = house
-    // Dimensions
     float width;
     float length;
     float height;
+    // replaced bool isWorkplace with type
+    enum Type { HOUSE = 0, OFFICE, SCHOOL, UNIVERSITY, PARK } type; 
+    bool isWorkplace() const { return type == OFFICE || type == SCHOOL || type == UNIVERSITY || type == PARK; } // Helper for old checks
+    Color color;
+};
+
+struct Road {
+    Vector3 start;
+    Vector3 end;
+    float width;
 };
 
 struct City {
@@ -19,9 +27,15 @@ struct City {
     Vector3 center;
     float radius;
     std::vector<Building> buildings;
+    std::vector<Road> localRoads;
+    std::vector<Road> highwayRing; // New: Ring around city
+    // Exits for pathfinding
+    Vector3 exitNorth;
+    Vector3 exitSouth;
+    Vector3 exitEast;
+    Vector3 exitWest;
 };
 
-// Global helper for random float
-inline float GetRandomFloat(float min, float max) {
-    return min + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX / (max - min)));
-}
+// Shared data available to all units
+extern std::vector<City> nation;
+extern std::vector<Road> highways; // Roads connecting cities
