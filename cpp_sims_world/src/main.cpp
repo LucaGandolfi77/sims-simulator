@@ -241,16 +241,8 @@ void GenerateWorld(int numSims) {
             
             float roadW = 20.0f;
             
-            // 4 Segments
-            Road r1 = { {rLeft, 0.1f, rTop}, {rRight, 0.1f, rTop}, roadW };       // Top
-            Road r2 = { {rRight, 0.1f, rTop}, {rRight, 0.1f, rBottom}, roadW };   // Right
-            Road r3 = { {rRight, 0.1f, rBottom}, {rLeft, 0.1f, rBottom}, roadW }; // Bottom
-            Road r4 = { {rLeft, 0.1f, rBottom}, {rLeft, 0.1f, rTop}, roadW };     // Left
-            
-            city.highwayRing.push_back(r1);
-            city.highwayRing.push_back(r2);
-            city.highwayRing.push_back(r3);
-            city.highwayRing.push_back(r4);
+            // RING REMOVED: Highways now only connect two entrances directly.
+            // We define the Exit/Entrance points at the margins, but we don't draw the connecting ring roads.
             
             // D. Define Exits (Midpoints of ring segments)
             city.exitNorth = { (rLeft + rRight)/2.0f, 0.1f, rTop };
@@ -258,9 +250,9 @@ void GenerateWorld(int numSims) {
             city.exitSouth = { (rLeft + rRight)/2.0f, 0.1f, rBottom };
             city.exitWest = { rLeft, 0.1f, (rTop + rBottom)/2.0f };
 
-            // Add extensions from Grid to Ring (Arteries)
+            // Add extensions from Grid to Ring (Arteries/Entrances)
             // Top/Bottom/Left/Right Center roads connect to Exits
-            // North Artery
+            // North Artery (Entrance)
             city.localRoads.push_back({ {city.exitNorth.x, 0.05f, startZ}, city.exitNorth, 15.0f });
             // South Artery
             city.localRoads.push_back({ {city.exitSouth.x, 0.05f, startZ + gridH}, city.exitSouth, 15.0f });
@@ -386,17 +378,34 @@ void GenerateWorld(int numSims) {
         // Smart Parking Slot Assignment for Home (Cap 3)
         int hSlot = homeOccupancy[home->id]++;
         Vector3 homePark;
+        float homeHeading = 0.0f; // Stores orientation for parking
 
         if (hSlot < 3) {
+            // Home Parking is on side. Offset X (+8).
+            // Alignment along Z (Rows of cars).
+            // Car faces House (-X direction? or Z?)
+            // Usually driveway is perpendicular to road.
+            // If House is at X, Park is X+8. Road is X/Z grid.
+            // Let's assume cars parallel park or head-in.
+            // Head-In towards house -> Facing -X (Left). 
+            // Rotation 270 deg (or 90? Check logic).
+            // Raylib Right-Handed: X+ (Right), Y+ (Up), Z+ (South).
+            // Facing -X is 90 deg?
+            // atan2(-1, 0) = PI (-180/180). atan2(1,0) = 0.
+            // Let's try 90.0f
+            homeHeading = 90.0f; 
+
             float zOff = (hSlot - 1.0f) * 4.0f; 
             Vector3 baseHomePark = Vector3Add(home->position, {home->width/2.0f + 8.0f, -home->height/2.0f + 0.5f, 0});
             homePark = Vector3Add(baseHomePark, {0, 0, zOff});
         } else {
+            homeHeading = 90.0f;
             homePark = Vector3Add(home->position, {home->width/2.0f + 15.0f, -home->height/2.0f + 0.5f, 0});
         }
 
         Vector3 workDoor = {0,0,0};
         Vector3 workPark = {0,0,0};
+        float workHeading = 0.0f; 
         int wCityId = -1;
         int wBuildId = -1;
 
@@ -425,17 +434,45 @@ void GenerateWorld(int numSims) {
                  float dist = 28.0f; // Distance from building center
 
                  Vector3 offset = {0,0,0};
-                 if (side == 0) offset = { localOffset, 0, -dist }; // North
-                 else if (side == 1) offset = { dist, 0, localOffset }; // East
-                 else if (side == 2) offset = { -localOffset, 0, dist }; // South (Inverted X for visual symmetry or keep regular?) regular is fine
-                 else if (side == 3) offset = { -dist, 0, -localOffset }; // West
+                 if (side == 0) {
+                     // North Strip (Z < 0). Cars aligned X (Side-by-side).
+                     // Front facing Building (+Z).
+                     offset = { localOffset, 0, -dist }; 
+                     workHeading = 0.0f; // Face Z+ (Nose-in)
+                 }
+                 else if (side == 1) {
+                     // East Strip (X > 0). 
+                     // Facing Building (-X).
+                     offset = { dist, 0, localOffset };
+                     workHeading = 270.0f; // Face X- (Nose-in)
+                 }
+                 else if (side == 2) {
+                     // South Strip (Z > 0).
+                     // Facing Building (-Z).
+                     offset = { -localOffset, 0, dist };
+                     workHeading = 180.0f; // Face Z- (Nose-in)
+                 }
+                 else if (side == 3) {
+                     // West Strip (X < 0).
+                     // Facing Building (+X).
+                     offset = { -dist, 0, -localOffset }; 
+                     workHeading = 90.0f; // Face X+ (Nose-in)
+                 }
                  
                  Vector3 baseWorkPark = Vector3Add(work->position, {0, -work->height/2.0f + 0.5f, 0});
                  workPark = Vector3Add(baseWorkPark, offset);
 
             } else {
-                 // Overflow Street Parking
-                 workPark = Vector3Add(work->position, {40.0f, -work->height/2.0f + 0.5f, 40.0f});
+                 // Overflow Street Parking (Random Scatter)
+                 // Avoid stacking all cars in one spot
+                 float angle = (wSlot * 137.5f) * DEG2RAD; // Golden angle scatter
+                 float rad = 45.0f + (wSlot/60) * 2.5f; // Expanding radius
+                 float ox = cosf(angle) * rad;
+                 float oz = sinf(angle) * rad;
+                 
+                 workPark = Vector3Add(work->position, {ox, -work->height/2.0f + 0.5f, oz});
+                 // Face Center
+                 workHeading = atan2f(-ox, -oz) * RAD2DEG;
             }
         } else {
             // Retired / Unemployed
@@ -444,10 +481,11 @@ void GenerateWorld(int numSims) {
             workPark = homePark;
             wCityId = home->cityId;
             wBuildId = home->id;
+            workHeading = homeHeading;
         }
 
-        registry.emplace<HomeReferenceComponent>(entity, home->id, home->cityId, homeDoor, homePark);
-        registry.emplace<WorkReferenceComponent>(entity, wBuildId, wCityId, workDoor, workPark);
+        registry.emplace<HomeReferenceComponent>(entity, home->id, home->cityId, homeDoor, homePark, homeHeading);
+        registry.emplace<WorkReferenceComponent>(entity, wBuildId, wCityId, workDoor, workPark, workHeading);
     }
 }
 
@@ -455,7 +493,7 @@ int main() {
     InitWindow(1280, 720, "Nation Simulator ECS - Huge Map");
     SetTargetFPS(60);
     
-    int numSims = 5000; 
+    int numSims = 2000; 
     
     srand(time(NULL));
     GenerateWorld(numSims);
@@ -567,7 +605,6 @@ int main() {
                 Vector3 mid = Vector3Scale(Vector3Add(road.start, road.end), 0.5f);
                 Vector3 dir = Vector3Subtract(road.end, road.start);
                 float len = Vector3Length(dir);
-                float angle = atan2f(dir.x, dir.z) * RAD2DEG;
                 
                 mid.y = 0.4f; // Raised SIGNIFICANTLY
                 
@@ -576,9 +613,13 @@ int main() {
                 if (fabs(dir.z) > fabs(dir.x)) {
                      // Vertical Highway (along Z)
                      DrawCube(mid, road.width, 0.4f, len, DARKGRAY);
+                     // White Line
+                     DrawCube(Vector3Add(mid, {0, 0.05f, 0}), 1.0f, 0.4f, len, WHITE);
                 } else {
                      // Horizontal Highway (along X)
                      DrawCube(mid, len, 0.4f, road.width, DARKGRAY);
+                     // White Line
+                     DrawCube(Vector3Add(mid, {0, 0.05f, 0}), len, 0.4f, 1.0f, WHITE);
                 }
             }
 
@@ -591,6 +632,13 @@ int main() {
                      float lenZ = fabs(r.end.z - r.start.z) + r.width;
                      center.y = 0.3f; // Raised
                      DrawCube(center, lenX, 0.4f, lenZ, DARKGRAY); 
+
+                     // White Center Lines
+                     if (lenZ > lenX) { // Vertical
+                         DrawCube(Vector3Add(center, {0, 0.05f, 0}), 1.0f, 0.4f, lenZ, WHITE);
+                     } else { // Horizontal
+                         DrawCube(Vector3Add(center, {0, 0.05f, 0}), lenX, 0.4f, 1.0f, WHITE);
+                     }
                 }
 
                 // Draw Local Roads (Grid)
@@ -600,6 +648,13 @@ int main() {
                      float lenZ = fabs(r.end.z - r.start.z) + r.width;
                      center.y = 0.2f; // Raised
                      DrawCube(center, lenX, 0.4f, lenZ, GRAY); // Thicker (0.4 height)
+
+                     // White Center Lines (Dashed ideally, but solid is fine for now)
+                     if (lenZ > lenX) { // Vertical
+                         DrawCube(Vector3Add(center, {0, 0.05f, 0}), 0.5f, 0.4f, lenZ, WHITE);
+                     } else { // Horizontal
+                         DrawCube(Vector3Add(center, {0, 0.05f, 0}), lenX, 0.4f, 0.5f, WHITE);
+                     }
                 }
 
                 if (Vector3Distance(city.center, camera.position) < 3500.0f) {
@@ -667,7 +722,7 @@ int main() {
                     }
                 }
 
-            Systems::RenderSims(registry, camera.position);
+            Systems::RenderSims(registry, camera.position, selectedSim);
 
         EndMode3D();
 

@@ -56,7 +56,8 @@ struct HomeReferenceComponent {
     int buildingId;
     int cityId;       // To find the city "hub" for highway navigation
     Vector3 doorPosition; 
-    Vector3 parkingPosition; 
+    Vector3 parkingPosition;
+    float parkingHeading; // Orientation of parked car in degrees
 };
 
 struct WorkReferenceComponent {
@@ -64,6 +65,7 @@ struct WorkReferenceComponent {
     int cityId;       // To find the city "hub" for highway navigation
     Vector3 doorPosition;
     Vector3 parkingPosition;
+    float parkingHeading; // Orientation of parked car in degrees
 };
 
 struct RenderBatchComponent {

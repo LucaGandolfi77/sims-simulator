@@ -7,6 +7,7 @@
 #include "World.hpp"
 #include <vector>
 #include <cmath>
+#include <cstdlib>
 
 namespace Systems {
 
@@ -94,120 +95,155 @@ namespace Systems {
         view.each([dt](auto& state, auto& stats, auto& move, auto& trans, auto& home, auto& work) {
             
             // Helper lambda to generate grid-like path with BFS for inter-city travel
-            auto GeneratePath = [&](Vector3 startPos, int startCityId, Vector3 endPos, int endCityId) {
+            auto GeneratePath = [&](Vector3 startPos, int startCityId, Vector3 endPos, int endCityId, float startHead, float endHead) {
                 move.pathLength = 0; move.pathIndex = 0;
                 
-                // 1. Exit Parking to Start Hub
-                // Move from parking slot to the city center (Hub) of the current city
-                // We add a waypoint that is "street-like" to avoid clipping through buildings if possible,
-                // but for now, straight to Hub is the "local road" abstraction.
-                Vector3 startHub = (startCityId < nation.size()) ? nation[startCityId].center : startPos;
+                float blockSize = 80.0f; // Must match main.cpp
+                Vector3 rawCursor = startPos;
                 
-                // If we are already at the hub/city, no need to add startHub if it's too close to startPos?
-                // Just add it to ensure connectivity.
-                AddWaypoint(move, startHub);
+                // Helper to add lane-corrected path points
+                auto AddLanePoint = [&](Vector3 targetPos) {
+                     // Check direction
+                     Vector3 dir = Vector3Subtract(targetPos, rawCursor);
+                     Vector3 offset = {0,0,0};
+                     
+                     // 3.0f offset for local lanes
+                     if (fabs(dir.z) > fabs(dir.x)) { // Vertical Movement
+                         if (dir.z > 0) offset.x = -3.0f; // Moving South (Down), Right is X-
+                         else offset.x = 3.0f;           // Moving North (Up), Right is X+
+                     } else { // Horizontal Movement
+                         if (dir.x > 0) offset.z = 3.0f; // Moving East (Right), Right is Z+
+                         else offset.z = -3.0f;          // Moving West (Left), Right is Z-
+                     }
+                     
+                     AddWaypoint(move, Vector3Add(targetPos, offset));
+                     rawCursor = targetPos;
+                };
+
+                // Helper: Snap position to nearest Road Grid Lines relative to a specific City Center
+                // Returns the point on the road network to enter/exit
+                auto GetGridEntry = [&](Vector3 pos, Vector3 cityCenter) -> Vector3 {
+                     float rx = pos.x - cityCenter.x;
+                     float rz = pos.z - cityCenter.z;
+                     
+                     // Roads are at center +/- k*80
+                     float gridX = round(rx / blockSize) * blockSize + cityCenter.x;
+                     float gridZ = round(rz / blockSize) * blockSize + cityCenter.z;
+                     
+                     // Find which road is closer
+                     if (fabs(pos.x - gridX) < fabs(pos.z - gridZ)) {
+                         return { gridX, 0, pos.z }; // Snap X (Vertical Road)
+                     } else {
+                         return { pos.x, 0, gridZ }; // Snap Z (Horizontal Road)
+                     }
+                };
+
+                // 1. Exit Parking Logic
+                // Aisle Point (Away from building)
+                float radStart = startHead * DEG2RAD;
+                Vector3 startForward = { sinf(radStart), 0, cosf(radStart) };
+                Vector3 startAisle = Vector3Subtract(startPos, Vector3Scale(startForward, 20.0f)); 
+                
+                AddWaypoint(move, startPos); rawCursor = startPos;
+                AddWaypoint(move, startAisle); rawCursor = startAisle;
+
+                // Find Nearest Road Entry
+                Vector3 startCityCenter = (startCityId < nation.size()) ? nation[startCityId].center : startPos;
+                Vector3 roadEntry = GetGridEntry(startAisle, startCityCenter);
+                
+                // For road entry, we assume we just merge
+                AddLanePoint(roadEntry);
+
+                // Drive from Entry to Hub (Manhattan on Grid)
+                Vector3 startHub = startCityCenter;
+                float jx = (float)((rand() % 16) - 8); 
+                float jz = (float)((rand() % 16) - 8);
+                Vector3 hubTarget = Vector3Add(startHub, {jx, 0, jz});
+
+                bool onVertical = (fabs(roadEntry.x - (round((roadEntry.x - startCityCenter.x)/blockSize)*blockSize + startCityCenter.x)) < 1.0f);
+                
+                if (onVertical) {
+                    // We are on a Vertical Road (Fixed X). Drive Z.
+                    AddLanePoint({ roadEntry.x, 0, hubTarget.z });
+                    AddLanePoint({ hubTarget.x, 0, hubTarget.z });
+                } else {
+                    // We are on a Horizontal Road (Fixed Z). Drive X.
+                    AddLanePoint({ hubTarget.x, 0, roadEntry.z });
+                    AddLanePoint({ hubTarget.x, 0, hubTarget.z });
+                }
 
                 // 2. Inter-City Pathfinding (BFS)
                 if (startCityId != endCityId) {
-                    // We need a path of Cities from Start to End.
-                    // Map is 3 rows, 4 cols. IDs 0..11.
-                    // Adjacency: 
-                    //   Right: +1 (if c < 3)
-                    //   Left: -1 (if c > 0)
-                    //   Down: +4 (if r < 2)
-                    //   Up: -4 (if r > 0)
-                    
+                    // ... BFS ...
                     int rows = 3; int cols = 4;
-                    
                     std::vector<int> parent(12, -1);
                     std::vector<bool> visited(12, false);
-                    std::vector<int> q;
-                    
-                    q.push_back(startCityId);
-                    visited[startCityId] = true;
-                    
-                    bool found = false;
-                    int head = 0;
+                    std::vector<int> q; q.push_back(startCityId); visited[startCityId] = true;
+                    bool found = false; int head = 0;
                     while(head < q.size()) {
-                        int u = q[head++];
-                        if (u == endCityId) { found=true; break; }
-                        
-                        int r = u / cols;
-                        int c = u % cols;
-                        
-                        int neighbors[4];
-                        int nCheck = 0;
-                        
-                        if (c < cols - 1) neighbors[nCheck++] = u + 1; // Right
-                        if (c > 0) neighbors[nCheck++] = u - 1;        // Left
-                        if (r < rows - 1) neighbors[nCheck++] = u + cols; // Down
-                        if (r > 0) neighbors[nCheck++] = u - cols;     // Up
-                        
-                        for(int i=0; i<nCheck; i++) {
-                            int v = neighbors[i];
-                            if (!visited[v]) {
-                                visited[v] = true;
-                                parent[v] = u;
-                                q.push_back(v);
-                            }
-                        }
+                        int u = q[head++]; if (u == endCityId) { found=true; break; }
+                        int r = u/cols, c = u%cols;
+                        int nbs[4], nC=0;
+                        if(c<cols-1) nbs[nC++]=u+1; if(c>0) nbs[nC++]=u-1;
+                        if(r<rows-1) nbs[nC++]=u+cols; if(r>0) nbs[nC++]=u-cols;
+                        for(int i=0;i<nC;i++) if(!visited[nbs[i]]) { visited[nbs[i]]=true; parent[nbs[i]]=u; q.push_back(nbs[i]); }
                     }
                     
-                    if (found) {
-                        // Reconstruct path
-                        std::vector<int> pathStack;
-                        int curr = endCityId;
-                        while(curr != startCityId) {
-                            pathStack.push_back(curr);
-                            curr = parent[curr];
-                        }
-                        // PathStack has End -> ... -> Next to Start.
-                        // We need to add them in reverse order (Start -> Next -> ... -> End)
-                        
+                    if(found) {
+                        std::vector<int> pathStack; int curr = endCityId;
+                        while(curr!=startCityId) { pathStack.push_back(curr); curr=parent[curr]; }
                         int currentCity = startCityId;
-                        for(int i = pathStack.size() - 1; i >= 0; i--) {
+                        
+                        for(int i=pathStack.size()-1; i>=0; i--) {
                             int nextCity = pathStack[i];
-                            
-                            // Determine Direction
-                            // Cols = 4 (hardcoded in main, hope it matches here or we pass it?)
-                            // Note: 'cols' should be accessible. It was 4 in main. 
-                            // Systems.hpp doesn't know 'cols', but we used 4 in BFS above.
-                            int cols = 4; 
-                            
-                            // Check adjacency
-                            if (nextCity == currentCity + 1) { // Right
-                                AddWaypoint(move, nation[currentCity].exitEast);
-                                AddWaypoint(move, nation[nextCity].exitWest);
-                            } 
-                            else if (nextCity == currentCity - 1) { // Left
-                                AddWaypoint(move, nation[currentCity].exitWest);
-                                AddWaypoint(move, nation[nextCity].exitEast);
+                            int cols = 4;
+                            // Add Highway Exits using Lanes
+                            if (nextCity == currentCity + 1) { 
+                                AddLanePoint(nation[currentCity].exitEast); AddLanePoint(nation[nextCity].exitWest);
+                            } else if (nextCity == currentCity - 1) {
+                                AddLanePoint(nation[currentCity].exitWest); AddLanePoint(nation[nextCity].exitEast);
+                            } else if (nextCity == currentCity + cols) {
+                                AddLanePoint(nation[currentCity].exitSouth); AddLanePoint(nation[nextCity].exitNorth);
+                            } else if (nextCity == currentCity - cols) {
+                                AddLanePoint(nation[currentCity].exitNorth); AddLanePoint(nation[nextCity].exitSouth);
                             }
-                            else if (nextCity == currentCity + cols) { // Down
-                                AddWaypoint(move, nation[currentCity].exitSouth);
-                                AddWaypoint(move, nation[nextCity].exitNorth);
-                            }
-                            else if (nextCity == currentCity - cols) { // Up
-                                AddWaypoint(move, nation[currentCity].exitNorth);
-                                AddWaypoint(move, nation[nextCity].exitSouth);
-                            }
-                            
-                            // Drive to center of next city (Hub) to connect to next leg or final dest
-                            AddWaypoint(move, nation[nextCity].center);
-                            
+                            // To Next Hub
+                            float njx = (float)((rand() % 16) - 8); float njz = (float)((rand() % 16) - 8);
+                            AddLanePoint(Vector3Add(nation[nextCity].center, {njx, 0, njz}));
                             currentCity = nextCity;
                         }
                     } else {
-                        // Fallback implies unconnected graph (unlikely here)
-                        Vector3 endHub = (endCityId < nation.size()) ? nation[endCityId].center : endPos;
-                        AddWaypoint(move, endHub);
+                         // Fallback
+                         Vector3 endHubFallback = (endCityId < nation.size()) ? nation[endCityId].center : endPos;
+                         AddLanePoint(endHubFallback);
                     }
-                } else {
-                     // Same city, logic handled by skipping BFS
                 }
 
-                // 3. Final Leg: Hub to Parking
-                AddWaypoint(move, endPos);
+                // 3. Final Leg: From Current Location (End Hub) to End Parking
+                Vector3 endCityCenter = (endCityId < nation.size()) ? nation[endCityId].center : endPos;
+                
+                // End Aisle
+                float radEnd = endHead * DEG2RAD;
+                Vector3 endForward = { sinf(radEnd), 0, cosf(radEnd) };
+                Vector3 endAisle = Vector3Subtract(endPos, Vector3Scale(endForward, 20.0f));
+                
+                // Snap End Aisle to Road
+                Vector3 roadExit = GetGridEntry(endAisle, endCityCenter);
+                
+                 bool onVerticalExit = (fabs(roadExit.x - (round((roadExit.x - endCityCenter.x)/blockSize)*blockSize + endCityCenter.x)) < 1.0f);
+                 Vector3 lastPos = rawCursor; // Use tracked raw
+                 
+                 if (onVerticalExit) {
+                     AddLanePoint({ roadExit.x, 0, lastPos.z });
+                     AddLanePoint({ roadExit.x, 0, roadExit.z });
+                 } else {
+                     AddLanePoint({ lastPos.x, 0, roadExit.z });
+                     AddLanePoint({ roadExit.x, 0, roadExit.z });
+                 }
+                 
+                 // From roadExit to Aisle we drive straight
+                 AddWaypoint(move, endAisle);
+                 AddWaypoint(move, endPos);
             };
 
             switch (state.currentState) {
@@ -234,6 +270,7 @@ namespace Systems {
                             // Workers/Students go to Work
                             state.currentState = SimState::WALKING_TO_CAR;
                             move.pathLength = 0; move.pathIndex = 0;
+                            // Add Waypoint for "walking to car" - just direct for now
                             AddWaypoint(move, home.parkingPosition);
                             move.speed = 4.0f; // Slower walking
                             move.isMoving = true;
@@ -244,8 +281,12 @@ namespace Systems {
                 case SimState::WALKING_TO_CAR:
                     if (!move.isMoving) { 
                         state.currentState = SimState::DRIVING_TO_WORK;
-                        GeneratePath(home.parkingPosition, home.cityId, work.parkingPosition, work.cityId);
-                        move.speed = 60.0f; // Slower driving (was 150)
+                        
+                        // SNAP ROTATION TO PARKING HEADING (Unparking)
+                        trans.rotation = home.parkingHeading;
+
+                        GeneratePath(home.parkingPosition, home.cityId, work.parkingPosition, work.cityId, home.parkingHeading, work.parkingHeading);
+                        move.speed = 60.0f; 
                         move.isMoving = true;
                     }
                     break;
@@ -253,6 +294,10 @@ namespace Systems {
                 case SimState::DRIVING_TO_WORK:
                     if (!move.isMoving) {
                         state.currentState = SimState::WALKING_FROM_WORK_CAR;
+                        
+                        // Arrived at Parking -> Snap Rotation
+                        trans.rotation = work.parkingHeading;
+
                         move.pathLength = 0; move.pathIndex = 0;
                         AddWaypoint(move, work.doorPosition);
                         
@@ -265,6 +310,10 @@ namespace Systems {
                     if (!move.isMoving) {
                         state.currentState = SimState::WORKING;
                         state.actionTimer = 30.0f; // Work duration
+                        // Ensure Parked Car (visualized later) has correct heading
+                        // We don't store "visual car entity", just this Sim. 
+                        // The car is drawn at work.parkingPosition. 
+                        // RenderSims uses work.parkingHeading.
                     }
                     break;
 
@@ -304,7 +353,9 @@ namespace Systems {
                     if (state.actionTimer <= 0 || stats.sleep < 20.0f) {
                          state.currentState = SimState::DRIVING_HOME;
                          trans.position = work.parkingPosition; // Teleport to car
-                         GeneratePath(work.parkingPosition, work.cityId, home.parkingPosition, home.cityId);
+                         trans.rotation = work.parkingHeading; // Snap rotation
+
+                         GeneratePath(work.parkingPosition, work.cityId, home.parkingPosition, home.cityId, work.parkingHeading, home.parkingHeading);
                          move.speed = 60.0f;
                          move.isMoving = true;
                     }
@@ -313,6 +364,10 @@ namespace Systems {
                  case SimState::DRIVING_HOME:
                     if (!move.isMoving) {
                         state.currentState = SimState::WALKING_TO_HOUSE;
+                        
+                        // Arrived Home Parking -> Snap Rotation
+                        trans.rotation = home.parkingHeading;
+
                         move.pathLength = 0; move.pathIndex = 0;
                         AddWaypoint(move, home.doorPosition);
                         move.speed = 4.0f;
@@ -330,11 +385,15 @@ namespace Systems {
     }
 
     // --- Rendering System ---
-    void RenderSims(entt::registry& registry, Vector3 cameraPos) {
+    void RenderSims(entt::registry& registry, Vector3 cameraPos, entt::entity selectedSim) {
         auto view = registry.view<TransformComponent, StateComponent, VisualComponent, HomeReferenceComponent, WorkReferenceComponent>();
         
-        view.each([cameraPos](auto& trans, auto& state, auto& vis, auto& home, auto& work) {
+        view.each([cameraPos, selectedSim, &registry](auto entity, auto& trans, auto& state, auto& vis, auto& home, auto& work) {
             float dist = Vector3Distance(trans.position, cameraPos);
+            
+            bool isSelected = (entity == selectedSim);
+            Color drawColor = vis.color;
+            if (isSelected) drawColor = GREEN; // Highlight selected SIM
 
             // 1. Draw Active Car (Driving)
             if (state.currentState == SimState::DRIVING_TO_WORK || state.currentState == SimState::DRIVING_HOME) {
@@ -349,9 +408,12 @@ namespace Systems {
                  rlTranslatef(carPos.x, carPos.y, carPos.z);
                  rlRotatef(trans.rotation, 0, 1, 0); // Rotate Y
                  
+                 // Highlight logic for Car
+                 Color carCol = isSelected ? GREEN : vis.carColor;
+
                  // Main Body
                  // Centered at 0,0,0 local
-                 DrawCube({0,0,0}, size, size/2, size*2, vis.carColor);
+                 DrawCube({0,0,0}, size, size/2, size*2, carCol);
                  
                  // Front Headlights (Yellow) -> Assuming +Z is forward or +X? 
                  // Based on rotation math atan2(x, z), +Z should be forward direction?
@@ -368,24 +430,32 @@ namespace Systems {
                          // Draw person slightly raised
                          Vector3 pedPos = trans.position;
                          pedPos.y = 1.0f;
-                         DrawSphere(pedPos, 1.0f, vis.color);
+                         DrawSphere(pedPos, 1.0f, drawColor);
+                         
+                         // Selection Ring
+                         if (isSelected) {
+                             DrawCylinderWires(pedPos, 1.5f, 1.5f, 3.0f, 10, GREEN);
+                         }
                      } else if (dist < 2000.0f) {
-                         DrawPoint3D(trans.position, vis.color); 
+                         DrawPoint3D(trans.position, drawColor); 
                      }
                  }
 
                  // 3. Draw Parked Car (Persistent)
                  Vector3 parkPos = {0,0,0};
+                 float parkHeading = 0.0f;
                  bool drawParked = false;
 
                  // Car is at WORK
                  if (state.currentState == SimState::WORKING || state.currentState == SimState::WALKING_FROM_WORK_CAR) {
                      parkPos = work.parkingPosition;
+                     parkHeading = work.parkingHeading;
                      drawParked = true;
                  } 
                  // Car is at HOME
                  else if (state.currentState == SimState::SLEEPING || state.currentState == SimState::WALKING_TO_CAR || state.currentState == SimState::WALKING_TO_HOUSE) {
                      parkPos = home.parkingPosition;
+                     parkHeading = home.parkingHeading;
                      drawParked = true;
                  }
 
@@ -394,7 +464,18 @@ namespace Systems {
                      if (parkDist < 3000.0f) { // Render distance for parked cars
                          float size = 3.0f;
                          parkPos.y = 1.5f; 
-                         DrawCube(parkPos, size, size/2, size*2, vis.carColor);
+                         
+                         Color carCol = isSelected ? GREEN : vis.carColor;
+
+                         rlPushMatrix();
+                         rlTranslatef(parkPos.x, parkPos.y, parkPos.z);
+                         rlRotatef(parkHeading, 0, 1, 0); 
+                         
+                         DrawCube({0,0,0}, size, size/2, size*2, carCol);
+                         DrawCube({0, 0.2f, size}, size*0.8f, 0.4f, 0.5f, YELLOW); 
+                         DrawCube({0, 0.2f, -size}, size*0.8f, 0.4f, 0.5f, RED);   
+                         
+                         rlPopMatrix();
                      }
                  }
             }
