@@ -18,6 +18,26 @@ struct House {
     House(float x, float z, float w, float l) : rect{x, z, w, l}, height(4.0f) {}
 };
 
+struct Office {
+    Rectangle rect;
+    std::vector<Vector3> desks;
+    
+    Office() : rect{0,0,0,0} {}
+};
+
+// Start ColorLerp Helper
+inline Color ColorLerp(Color c1, Color c2, float t) {
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return (Color){
+        (unsigned char)(c1.r + (int)(t * (c2.r - c1.r))),
+        (unsigned char)(c1.g + (int)(t * (c2.g - c1.g))),
+        (unsigned char)(c1.b + (int)(t * (c2.b - c1.b))),
+        255
+    };
+}
+// End Helper
+
 // Check if a position is on the road network
 // Design: A central cross road (X and Z axes) and a ring road
 inline bool IsOnRoad(Vector3 pos) {
@@ -33,7 +53,7 @@ inline bool IsOnRoad(Vector3 pos) {
     
     // Ring road roughly at distance 30 from center, width 4
     const float ringRadius = 30.0f;
-    const float ringWidth = 3.0f;
+    const float ringWidth = 4.0f;
     
     // Simple square ring logic for grid world
     bool inRingX = (std::abs(pos.x) > (ringRadius - ringWidth)) && (std::abs(pos.x) < (ringRadius + ringWidth));

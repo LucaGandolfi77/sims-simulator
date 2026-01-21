@@ -2,6 +2,7 @@
 #include "raymath.h"
 #include "Sim.hpp"
 #include "World.hpp"
+#include "Map.hpp" // Added Map.hpp
 #include <vector>
 #include <ctime>
 #include <cstdlib>
@@ -125,6 +126,44 @@ void DrawHouses(const std::vector<House>& houses) {
     }
 }
 
+void DrawOffice(const Office& off) {
+    Color wallColor = { 100, 100, 100, 80 }; // Gray Transparent
+    Color outlineColor = DARKGRAY;
+    float wallThick = 0.5f;
+    float hgt = 8.0f; // Office is tall
+
+    if (off.rect.width == 0) return; // Safety
+
+    float x = off.rect.x;
+    float z = off.rect.y;
+    float w = off.rect.width;
+    float l = off.rect.height;
+    
+    float centerX = x + w/2;
+    float centerZ = z + l/2;
+    float centerY = hgt/2;
+
+    // Walls (Gap for door? Keep it simple)
+    // Wall 1 (Back)
+    DrawCube({centerX, centerY, z}, w, hgt, wallThick, wallColor);
+    DrawCubeWires({centerX, centerY, z}, w, hgt, wallThick, outlineColor);
+    // Wall 2 (Front)
+    DrawCube({centerX, centerY, z + l}, w, hgt, wallThick, wallColor);
+    DrawCubeWires({centerX, centerY, z + l}, w, hgt, wallThick, outlineColor);
+    // Wall 3 (Left)
+    DrawCube({x, centerY, centerZ}, wallThick, hgt, l, wallColor);
+    DrawCubeWires({x, centerY, centerZ}, wallThick, hgt, l, outlineColor);
+    // Wall 4 (Right)
+    DrawCube({x + w, centerY, centerZ}, wallThick, hgt, l, wallColor);
+    DrawCubeWires({x + w, centerY, centerZ}, wallThick, hgt, l, outlineColor);
+    
+    // Desks inside
+    for (const auto& desk : off.desks) {
+        DrawCube(desk, 2.0f, 1.0f, 1.0f, BROWN); // Desk
+        DrawCube({desk.x, 1.0f, desk.z}, 0.5f, 0.2f, 0.5f, BLACK); // Computer Screen logic?
+    }
+}
+
 int main() {
     // Initialization
     const int screenWidth = 800;
@@ -149,23 +188,8 @@ int main() {
     std::vector<Tree> trees;
     std::vector<House> houses;
 
-    // Generate some random trees (avoiding center roads roughly)
-    for(int i=0; i<20; i++) {
-        float tx = ((float)rand() / RAND_MAX) * 80.0f - 40.0f;
-        float tz = ((float)rand() / RAND_MAX) * 80.0f - 40.0f;
-        
-        if (!IsOnRoad({tx, 0, tz})) {
-            trees.emplace_back(Vector3{tx, 0.0f, tz});
-        }
-    }
-    
-    // Generate Houses (Rectangles)
-    for(int i=0; i<5; i++) {
-         float hx = ((float)rand() / RAND_MAX) * 60.0f - 30.0f;
-         float hz = ((float)rand() / RAND_MAX) * 60.0f - 30.0f;
-         // Avoid roads? Maybe overlap is fine for now, or simple check
-         houses.emplace_back(hx, hz, 8.0f, 6.0f);
-    }
+    // Initialize Map from Map.hpp
+    InitializeMap(trees, houses);
 
     // Create Sims
     std::vector<Sim> sims;
@@ -174,14 +198,36 @@ int main() {
     sims.emplace_back("Charlie", (Vector3){ -5.0f, 1.0f, 5.0f }, GREEN);
     sims.emplace_back("Diana", (Vector3){ 3.0f, 1.0f, 3.0f }, YELLOW);
     sims.emplace_back("Edward", (Vector3){ -3.0f, 1.0f, -3.0f }, PURPLE);
+    // 5 New Sims
+    sims.emplace_back("Fiona", (Vector3){ 10.0f, 1.0f, 10.0f }, ORANGE);
+    sims.emplace_back("George", (Vector3){ -10.0f, 1.0f, -10.0f }, BROWN);
+    sims.emplace_back("Hannah", (Vector3){ 15.0f, 1.0f, -5.0f }, PINK);
+    sims.emplace_back("Ian", (Vector3){ -12.0f, 1.0f, 4.0f }, LIME);
+    sims.emplace_back("Julia", (Vector3){ 8.0f, 1.0f, 8.0f }, MAGENTA);
 
     bool showHUD = true;
+    
+    // Day Night Cycle
+    float timeOfDay = 0.3f; // Start at morning
+    float timeSpeedMultiplier = 1.0f;
 
     // Main game loop
     while (!WindowShouldClose()) {      // Detect window close button or ESC key
         // Update
-        float dt = GetFrameTime();
+        float realDt = GetFrameTime();
         
+        // Time Speed Controls
+        if (IsKeyPressed(KEY_ONE)) timeSpeedMultiplier = 1.0f;
+        if (IsKeyPressed(KEY_TWO)) timeSpeedMultiplier = 2.0f;
+        if (IsKeyPressed(KEY_THREE)) timeSpeedMultiplier = 4.0f;
+        if (IsKeyPressed(KEY_FOUR)) timeSpeedMultiplier = 8.0f;
+        
+        float dt = realDt * timeSpeedMultiplier;
+        
+        // Update Time of Day (2 Minutes per day)
+        timeOfDay += (dt / 120.0f); 
+        if (timeOfDay >= 1.0f) timeOfDay -= 1.0f;
+
         if (IsKeyPressed(KEY_H)) {
             showHUD = !showHUD;
         }
@@ -230,30 +276,83 @@ int main() {
         
         // Update Sims
         for (auto& sim : sims) {
-            sim.Update(dt, trees, sims, houses);
+            sim.Update(dt, trees, sims, houses, office);
+        }
+
+        // Calculate Sun/Sky
+        // 0.0=Night, 0.25=Sunrise, 0.5=Noon, 0.75=Sunset
+        Color skyColor = BLUE;
+        float lightIntensity = 1.0f;
+        
+        if (timeOfDay < 0.2f || timeOfDay > 0.8f) {
+            skyColor = { 10, 10, 40, 255 }; // Deep Night
+            lightIntensity = 0.4f; // Dim but visible
+        } else if (timeOfDay < 0.3f) {
+            // Sunrise
+            skyColor = ColorLerp({ 10, 10, 40, 255 }, SKYBLUE, (timeOfDay - 0.2f) * 10.0f);
+        } else if (timeOfDay > 0.7f) {
+            // Sunset
+            skyColor = ColorLerp(SKYBLUE, { 10, 10, 40, 255 }, (timeOfDay - 0.7f) * 10.0f);
+        } else {
+            skyColor = SKYBLUE;
         }
 
         // Draw
         BeginDrawing();
-            ClearBackground(SKYBLUE); // Better background color
+            ClearBackground(skyColor);
 
             BeginMode3D(camera);
                 
                 // Draw World
-                DrawCheckerboardGround();
+                Color grndColor = WHITE; 
+                if (lightIntensity < 1.0f) grndColor = ColorTint(WHITE, {150, 150, 180, 255}); // Dim ground at night
+                
+                DrawCheckerboardGround(); // (Should update this to take color if possible, effectively lighting)
+                
+                DrawOffice(office);
                 DrawHouses(houses);
                 DrawTrees(trees);
 
-                // Draw Sims
+                // Draw Sims with "Shadows"
+                Vector3 sunPos = { 0, 100, 0 }; // Approx
+                // Move sun based on time
+                float timeAngle = (timeOfDay - 0.25f) * 2.0f * PI; // Noon at top
+                sunPos.x = cosf(timeAngle) * 100.0f;
+                sunPos.y = sinf(timeAngle) * 100.0f;
+                if (sunPos.y < 0) sunPos.y = 0; // Don't go below ground for shadow calc
+                
+                Vector3 shadowOffset = Vector3Scale(Vector3Normalize(sunPos), -0.8f); // Offset opposite to sun
+                shadowOffset.y = 0; // Flat on ground
+
                 for (auto& sim : sims) {
+                    // Simple Shadow: Flattened black cylinder offset
+                    if (lightIntensity > 0.5f) {
+                        Vector3 sPos = Vector3Add(sim.GetPosition(), shadowOffset);
+                        sPos.y = 0.05f; // Just above ground
+                        DrawCylinder(sPos, 0.5f, 0.5f, 0.1f, 8, {0, 0, 0, 100});
+                    }
                     sim.Draw();
+                }
+
+                // Draw Sun
+                if (sunPos.y > 0) { // Visible?
+                    DrawSphere(Vector3Scale(Vector3Normalize(sunPos), 90.0f), 5.0f, YELLOW);
                 }
 
             EndMode3D();
 
             if (showHUD) {
                 // UI / HUD
-                DrawText("Controls: WASD to Pan, Scroll to Zoom, H to Hide UI", 10, 5, 20, DARKGRAY);
+                DrawText("Controls: WASD=Pan, Scroll=Zoom, 1-4=Speed, H=Safe", 10, 5, 20, DARKGRAY);
+                
+                // Clock
+                int hour = (int)(timeOfDay * 24.0f);
+                int minute = (int)((timeOfDay * 24.0f - hour) * 60.0f);
+                char clockText[64];
+                snprintf(clockText, sizeof(clockText), "Time: %02d:%02d (x%.0f)", hour, minute, timeSpeedMultiplier);
+                DrawText(clockText, screenWidth/2 - 50, 10, 20, BLACK);
+
+
                 DrawText("Sims Status:", 10, 30, 20, BLACK);
                 
                 int yPos = 60;
@@ -261,8 +360,8 @@ int main() {
                      // Info string with abbreviated stats
                     std::string info = "[" + std::to_string(sim.GetId()) + "] " + sim.GetName() + " (" + sim.GetStateString() + ")";
                     char stats[128];
-                    snprintf(stats, sizeof(stats), "H:%.0f E:%.0f A:%.0f S:%.0f", 
-                        sim.GetHunger(), sim.GetEnergy(), sim.GetAnxiety(), sim.GetStress());
+                    snprintf(stats, sizeof(stats), "H:%.0f E:%.0f A:%.0f S:%.0f Age:%d $%.0f", 
+                        sim.GetHunger(), sim.GetEnergy(), sim.GetAnxiety(), sim.GetStress(), sim.GetAge(), sim.GetMoney());
                     
                     DrawText(info.c_str(), 10, yPos, 20, BLACK);
                     DrawText(stats, 300, yPos, 20, DARKGRAY); // Stats in Gray to differentiate
@@ -276,10 +375,11 @@ int main() {
                 DrawRectangle(legX - 10, legY - 10, 160, 120, Fade(WHITE, 0.8f));
                 DrawRectangleLines(legX - 10, legY - 10, 160, 120, GRAY);
                 DrawText("LEGEND:", legX, legY, 20, BLACK);
-                DrawText("H: Hunger", legX, legY + 25, 10, BLACK);
-                DrawText("E: Energy", legX, legY + 40, 10, BLACK);
-                DrawText("A: Anxiety", legX, legY + 55, 10, BLACK);
-                DrawText("S: Stress", legX, legY + 70, 10, BLACK);
+                DrawText("H: Hunger", legX, legY + 20, 10, BLACK);
+                DrawText("E: Energy", legX, legY + 35, 10, BLACK);
+                DrawText("A: Anxiety", legX, legY + 50, 10, BLACK);
+                DrawText("S: Stress", legX, legY + 65, 10, BLACK);
+                DrawText("$: Simoleons", legX, legY + 80, 10, BLACK);
 
                 // Performance
                 DrawFPS(screenWidth - 100, 10);

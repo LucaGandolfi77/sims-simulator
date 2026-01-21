@@ -15,12 +15,19 @@ Sim::Sim(std::string name, Vector3 position, Color color)
     anxiety = 0.0f;    // Calm
     stress = 0.0f;     // Relaxed
     
+    // Random Age and Money
+    age = 18 + rand() % 42; // 18-60
+    money = (float)(rand() % 1000); // 0-1000 Simoleons
+
     decisionTimer = 0.0f;
     actionDuration = 0.0f;
     targetPosition = position;
+    globalTime = 0.0f;
 }
 
-void Sim::Update(float deltaTime, std::vector<Tree>& trees, std::vector<Sim>& allSims, const std::vector<House>& houses) {
+void Sim::Update(float deltaTime, std::vector<Tree>& trees, std::vector<Sim>& allSims, const std::vector<House>& houses, const Office& office) {
+    globalTime += deltaTime;
+
     // 1. Update Physiological Stats
     hunger += 2.0f * deltaTime; 
     energy -= 1.5f * deltaTime;
@@ -73,13 +80,13 @@ void Sim::Update(float deltaTime, std::vector<Tree>& trees, std::vector<Sim>& al
             // Finished talking
             currentState = IDLE;
             conversationPartner = nullptr;
-            MakeDecision(); // Decide what to do next immediatey
+            MakeDecision(houses, office); // Decide what to do next immediatey
         }
         return; // Skip movement logic while talking
     }
 
     // Try to initiate talk if free
-    if (currentState != TALKING && currentState != SLEEPING && talkCooldown <= 0) {
+    if (currentState != TALKING && currentState != SLEEPING && currentState != WORKING && currentState != WALKING_TO_WORK && currentState != WALKING_TO_BED && talkCooldown <= 0) {
         for (auto& other : allSims) {
             if (other.GetId() == this->id) continue; // Don't talk to self
             
@@ -123,17 +130,27 @@ void Sim::Update(float deltaTime, std::vector<Tree>& trees, std::vector<Sim>& al
             energy += 10.0f * deltaTime; // Recover energy fast
             stress -= 5.0f * deltaTime;  // Sleep reduces stress
             if (energy > 100) energy = 100;
+        } else if (currentState == WORKING) {
+            energy -= 4.0f * deltaTime; // Work takes energy
+            stress += 1.0f * deltaTime; // Work increases stress
+            money += 10.0f * deltaTime; // Earn Money!
+            
+            // If exhausted, stop working early
+            if (energy < 5.0f) actionDuration = 0;
+            
         } else if (currentState == WAKING_UP) {
             // Just wait (waking up animation phase)
         }
         
         // Movement Logic
-        if (currentState == WANDERING) {
+        if (currentState == WANDERING || currentState == WALKING_TO_BED || currentState == WALKING_TO_WORK) {
             // Speed Calculation
             float speed = 1.5f; // Slower wandering base speed
             if (IsOnRoad(position)) {
                 speed = 4.0f; // Boost on roads!
             }
+            if (currentState == WALKING_TO_BED || currentState == WALKING_TO_WORK) speed = 3.5f; // Walk with purpose
+
             speed *= deltaTime;
 
 
@@ -146,8 +163,18 @@ void Sim::Update(float deltaTime, std::vector<Tree>& trees, std::vector<Sim>& al
                 position = Vector3Add(position, move);
             } else {
                 // Reached destination early
-                currentState = IDLE;
-                actionDuration = 0;
+                if (currentState == WALKING_TO_BED) {
+                     currentState = SLEEPING;
+                     actionDuration = 15.0f; // Sleep longer in bed!
+                     anxiety = 0; // Safe in home, reset anxiety
+                     stress -= 20.0f; // Huge stress relief
+                } else if (currentState == WALKING_TO_WORK) {
+                     currentState = WORKING;
+                     actionDuration = 10.0f + (rand() % 10); // Work for 10-20 seconds
+                } else {
+                    currentState = IDLE;
+                    actionDuration = 0;
+                }
             }
         }
     } else {
@@ -159,21 +186,52 @@ void Sim::Update(float deltaTime, std::vector<Tree>& trees, std::vector<Sim>& al
         }
         
         // Current action finished, make a new decision
-        MakeDecision();
+        MakeDecision(houses, office);
     }
 }
 
-void Sim::MakeDecision() {
+void Sim::MakeDecision(const std::vector<House>& houses, const Office& office) {
     // Decision tree based on probabilities and stats
 
     float randomVal = (float)rand() / RAND_MAX;
+    
+    // Check Work (If High Energy and Low Money)
+    if (energy > 50.0f && money < 200.0f) {
+        if (!office.desks.empty()) {
+            // 80% chance to go to work if needed
+            if (randomVal < 0.8f) {
+                // Pick a desk
+                int dIndex = rand() % office.desks.size();
+                targetPosition = office.desks[dIndex];
+                currentState = WALKING_TO_WORK;
+                actionDuration = 60.0f; // Max travel time
+                return;
+            }
+        }
+    }
 
     // High priority: Survival
     if (energy < 20.0f) {
         // Very tired -> High chance to sleep
         if (randomVal < 0.9f) {
+            // Option: Go to a house to sleep?
+            if (!houses.empty()) {
+                // 70% chance to seek a bed if available
+                if (((float)rand()/RAND_MAX) < 0.7f) {
+                    // Find a random house
+                    int hIndex = rand() % houses.size();
+                    const House& h = houses[hIndex];
+                    float hx = h.rect.x + h.rect.width/2;
+                    float hz = h.rect.y + h.rect.height/2;
+                    
+                    targetPosition = { hx, 0.5f, hz };
+                    currentState = WALKING_TO_BED;
+                    actionDuration = 60.0f; // Give time to walk there
+                    return;
+                }
+            }
             currentState = SLEEPING;
-            actionDuration = 5.0f; // Sleep for 5 seconds
+            actionDuration = 5.0f; // Sleep on ground for 5 seconds
             return;
         }
     }
@@ -194,117 +252,104 @@ void Sim::MakeDecision() {
     } else {
         currentState = WANDERING;
         PickRandomDestination();
-        // Calculate time needed to get there roughly, or fixed time
         actionDuration = 4.0f; 
     }
 }
 
 void Sim::PickRandomDestination() {
-    float range = 45.0f; // Larger map range (roughly -45 to 45)
+    float range = 45.0f; 
     float x = ((float)rand() / RAND_MAX) * 2 * range - range;
     float z = ((float)rand() / RAND_MAX) * 2 * range - range;
-    targetPosition = { x, 0.5f, z }; // Y is 0.5 (half height)
+    targetPosition = { x, 0.5f, z }; 
 }
 
 void Sim::Draw() {
     // Visual feedback for states
     if (currentState == SLEEPING) {
-        // Draw Lying Down (Horizontal)
-        // From current position along X axis
         Vector3 startPos = { position.x - 1.0f, 0.5f, position.z };
         Vector3 endPos   = { position.x + 1.0f, 0.5f, position.z };
-        
         Color sleepColor = ColorTint(color, GRAY);
         DrawCylinderEx(startPos, endPos, 0.5f, 0.5f, 8, sleepColor);
-        
-        // Head on one side
-        Vector3 headPos = { position.x + 1.3f, 0.5f, position.z };
-        DrawSphere(headPos, 0.4f, BEIGE);
+        DrawSphere({ position.x + 1.3f, 0.5f, position.z }, 0.4f, BEIGE);
     } 
+    else if (currentState == WORKING) {
+        // Sitting at desk
+        Vector3 sitPos = position;
+        sitPos.y = 0.5f;
+        DrawCylinder(sitPos, 0.5f, 0.5f, 1.2f, 8, color);
+        DrawSphere({ position.x, 1.8f, position.z }, 0.4f, BEIGE);
+        // DrawText3D removed for compilation safety.
+    }
     else {
         // Draw Standing
         Vector3 drawPos = position;
-        drawPos.y += 1.0f; 
-
-        Color drawColor = color;
         
-        if (currentState == WAKING_UP) {
-             drawColor = WHITE; // Flash white when waking up
+        // Talking Animation: Little jumps
+        if (currentState == TALKING) {
+            float jump = sinf(GetTime() * 15.0f) * 0.15f; 
+            if (jump < 0) jump = -jump; // Bounce
+            drawPos.y += jump;
         }
+
+        // Base Cylinder is drawn from center? No, Center.
+        // If height is 2, center is at Y=1. 
+        // We want feet at Y=0 ? 
+        // Position is usually feet in games, but Sim Constructor sets Y=1.0 initially?
+        // Let's assume position is Ground point for X,Z.
+        Vector3 cylPos = drawPos;
+        cylPos.y += 1.0f; // Lift center up
+        
+        Color drawColor = color;
+        if (currentState == WAKING_UP) drawColor = WHITE;
 
         DrawCylinder(position, 0.5f, 0.5f, 2.0f, 8, drawColor);
         DrawCylinderWires(position, 0.5f, 0.5f, 2.0f, 8, DARKGRAY);
         
         // Head
-        Vector3 headPos = { position.x, position.y + 2.0f, position.z };
+        Vector3 headPos = { drawPos.x, drawPos.y + 2.0f, drawPos.z };
         DrawSphere(headPos, 0.4f, BEIGE);
         
-        // Eyes & Vision (only when not sleeping)
-        // Calculate orientation angle from velocity
-        float angle = atan2f(velocity.x, velocity.z); // Raylib uses Z as forward usually? X/Z plane.
-        
-        // Eyes
-        // Transform offset by rotation
-        float eyeOffsetSide = 0.15f;
-        float eyeOffsetFwd = 0.35f;
-        
-        Vector3 leftEyePos = {
-            headPos.x + sinf(angle - 0.5f) * eyeOffsetFwd,
-            headPos.y + 0.1f,
-            headPos.z + cosf(angle - 0.5f) * eyeOffsetFwd
-        };
-         Vector3 rightEyePos = {
-            headPos.x + sinf(angle + 0.5f) * eyeOffsetFwd,
-            headPos.y + 0.1f,
-            headPos.z + cosf(angle + 0.5f) * eyeOffsetFwd
-        };
-        
-        // Actually, simple sin/cos on angle is easier
-        Vector3 fwd = Vector3Normalize(velocity);
-        // Right vector (Cross product with Up)
-        Vector3 right = Vector3CrossProduct(fwd, {0,1,0});
-        
-        // Left Eye
-        Vector3 lEye = Vector3Add(headPos, Vector3Scale(fwd, 0.35f));
-        lEye = Vector3Add(lEye, Vector3Scale(right, -0.12f));
-        lEye.y += 0.1f;
-        
-        // Right Eye
-        Vector3 rEye = Vector3Add(headPos, Vector3Scale(fwd, 0.35f));
-        rEye = Vector3Add(rEye, Vector3Scale(right, 0.12f));
-        rEye.y += 0.1f;
-        
-        DrawSphere(lEye, 0.05f, BLACK);
-        DrawSphere(rEye, 0.05f, BLACK);
-        
-        // Vision Cone (Red Light Beam)
-        // Draw a triangle fan on the ground or semi-transparent cone
-        // Drawing a flat triangle fan "field of view" at ground level is clearer
-        Color visionColor = { 255, 0, 0, 80 }; // Red semi-transparent
-        
-        Vector3 fovStart = { position.x, 0.1f, position.z };
-        // 45 degree spread, length 10
-        float coneLength = 10.0f;
-        float baseAngle = atan2f(velocity.x, velocity.z); // Radians
-        float halfFov = 45.0f * DEG2RAD / 2.0f;
-        
-        // Raylib doesn't have a 3D sector primitive easily, let's draw lines or a triangle
-        // Left edge
-        Vector3 pLeft = {
-            position.x + sinf(baseAngle - halfFov) * coneLength,
-            0.1f,
-            position.z + cosf(baseAngle - halfFov) * coneLength
-        };
-        // Right edge
-        Vector3 pRight = {
-             position.x + sinf(baseAngle + halfFov) * coneLength,
-            0.1f,
-            position.z + cosf(baseAngle + halfFov) * coneLength
-        };
-        
-        // Draw Triangle (Double sided for visibility)
-        DrawTriangle3D(fovStart, pLeft, pRight, visionColor);
-        DrawTriangle3D(fovStart, pRight, pLeft, visionColor);
+        // Eyes & Vision
+        if (currentState != SLEEPING) {
+             // Eyes
+            Vector3 fwd = {0,0,1}; 
+            if (Vector3Length(velocity) > 0.1f) fwd = Vector3Normalize(velocity);
+            else if (conversationPartner) {
+                Vector3 dir = Vector3Subtract(conversationPartner->GetPosition(), position);
+                if (Vector3Length(dir) > 0.1f) fwd = Vector3Normalize(dir);
+            }
+
+            Vector3 right = Vector3CrossProduct(fwd, {0,1,0});
+            Vector3 lEye = Vector3Add(headPos, Vector3Scale(fwd, 0.35f)); 
+            lEye = Vector3Add(lEye, Vector3Scale(right, -0.12f)); lEye.y += 0.1f;
+            Vector3 rEye = Vector3Add(headPos, Vector3Scale(fwd, 0.35f));
+            rEye = Vector3Add(rEye, Vector3Scale(right, 0.12f)); rEye.y += 0.1f;
+            
+            DrawSphere(lEye, 0.05f, BLACK);
+            DrawSphere(rEye, 0.05f, BLACK);
+
+            // Vision Cone
+            if (currentState == IDLE || currentState == WANDERING || currentState == TALKING) {
+                Color visionColor = { 255, 0, 0, 40 }; 
+                if (currentState == TALKING) visionColor = { 0, 255, 0, 40 };
+                
+                float coneLength = 8.0f;
+                float baseAngle = atan2f(fwd.x, fwd.z); 
+                float halfFov = 45.0f * DEG2RAD / 2.0f;
+                Vector3 pLeft = {
+                    position.x + sinf(baseAngle - halfFov) * coneLength,
+                    0.1f,
+                    position.z + cosf(baseAngle - halfFov) * coneLength
+                };
+                Vector3 pRight = {
+                     position.x + sinf(baseAngle + halfFov) * coneLength,
+                    0.1f,
+                    position.z + cosf(baseAngle + halfFov) * coneLength
+                };
+                DrawTriangle3D({position.x, 0.1f, position.z}, pLeft, pRight, visionColor);
+                DrawTriangle3D({position.x, 0.1f, position.z}, pRight, pLeft, visionColor);
+            }
+        }
     }
 }
 
@@ -314,6 +359,8 @@ float Sim::GetHunger() const { return hunger; }
 float Sim::GetEnergy() const { return energy; }
 float Sim::GetAnxiety() const { return anxiety; }
 float Sim::GetStress() const { return stress; }
+int Sim::GetAge() const { return age; }
+float Sim::GetMoney() const { return money; }
 Vector3 Sim::GetPosition() const { return position; }
 
 std::string Sim::GetStateString() const {
@@ -324,6 +371,9 @@ std::string Sim::GetStateString() const {
         case WAKING_UP: return "Waking Up";
         case EATING: return "Eating";
         case TALKING: return "Talking";
+        case WORKING: return "Working";
+        case WALKING_TO_BED: return "Go Home";
+        case WALKING_TO_WORK: return "Go Work";
         default: return "Unknown";
     }
 }
