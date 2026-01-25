@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS Nation Simulator (No Server)</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#333333">
+</head>
+<body>
+    <div id="ui-container">
+        <div id="stats-panel">
+            <h3>Nation Sim JS</h3>
+            <div id="fps-counter">FPS: 0</div>
+            <div id="sim-count">Sims: 2000</div>
+            <div id="time-display">Time: 06:00</div>
+            <div>
+                <button id="btn-pause">Pause (P)</button>
+                <div class="speed-controls">
+                    <button id="btn-speed-1">1x</button>
+                    <button id="btn-speed-30">30x</button>
+                    <button id="btn-speed-100">100x</button>
+                </div>
+            </div>
+            <div id="counters">
+                <div class="stat-row"><span class="dot green"></span> Driving: <span id="cnt-driving">0</span></div>
+                <div class="stat-row"><span class="dot blue"></span> Working: <span id="cnt-working">0</span></div>
+                <div class="stat-row"><span class="dot orange"></span> Sleeping: <span id="cnt-sleeping">0</span></div>
+            </div>
+            <div id="selection-panel" style="display:none; margin-top: 20px; border-top: 1px solid #444; padding-top: 10px;">
+                <h4>Selected Sim</h4>
+                <div id="sel-name">Name</div>
+                <div id="sel-age">Age: 0</div>
+                <div id="sel-state">State: Idle</div>
+                <div id="sel-money">Money: $0</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts (Ordered) -->
+    <!-- 1. Libraries -->
+    <script src="https://unpkg.com/three@0.126.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.126.0/examples/js/controls/OrbitControls.js"></script>
+
+    <!-- 2. Source -->
+    <script src="src/Components.js"></script>
+    <script src="src/ECS.js"></script>
+    <script src="src/World.js"></script>
+    <script src="src/Systems.js"></script>
+    <script src="src/Main.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then((registration) => {
+                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                    }, (err) => {
+                        console.log('ServiceWorker registration failed: ', err);
+                    });
+            });
+        }
+    </script>
+</body>
+</html>
